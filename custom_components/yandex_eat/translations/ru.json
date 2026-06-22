@@ -48,6 +48,9 @@
       },
       "order_status": {
         "name": "Статус"
+      },
+      "courier_eta": {
+        "name": "До курьера"
       }
     },
     "binary_sensor": {
