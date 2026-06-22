@@ -14,7 +14,7 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import YandexEatApi
-from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN, STATE_NO_ORDER
 from .models import TrackedOrder
 from .yandex_session import YandexSession
 
@@ -68,6 +68,25 @@ class YandexEatCoordinator(DataUpdateCoordinator[dict[str, TrackedOrder]]):
     @property
     def nearby_orders(self) -> list[TrackedOrder]:
         return [o for o in self.active_orders if o.courier_nearby]
+
+    @property
+    def primary_order(self) -> TrackedOrder | None:
+        orders = self.active_orders
+        if not orders:
+            return None
+        if len(orders) == 1:
+            return orders[0]
+        nearby = [order for order in orders if order.courier_nearby]
+        if nearby:
+            return nearby[0]
+        with_eta = [
+            order
+            for order in orders
+            if order.tracking_info and order.tracking_info.remaining_time is not None
+        ]
+        if with_eta:
+            return min(with_eta, key=lambda order: order.tracking_info.remaining_time)  # type: ignore[union-attr]
+        return orders[0]
 
     def order_attributes(self, order: TrackedOrder) -> dict[str, Any]:
         attrs = dict(order.raw)

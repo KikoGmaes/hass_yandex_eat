@@ -47,7 +47,10 @@
         "name": "Active orders"
       },
       "order_status": {
-        "name": "Status"
+        "name": "Status",
+        "state": {
+          "none": "No active order"
+        }
       },
       "courier_eta": {
         "name": "Courier ETA"

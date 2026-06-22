@@ -22,62 +22,48 @@
 
 ### Сущности
 
-На каждый аккаунт:
+На каждый аккаунт (всегда видны на устройстве, например **Kiko**):
 
 - `sensor.*_active_orders` — число активных заказов
+- `sensor.*_order_status` — статус заказа (`none` если заказов нет)
+- `sensor.*_courier_eta` — минут до курьера (`unknown`, пока нет ETA)
+- `binary_sensor.*_courier_nearby` — курьер рядом (`off`, если заказов нет)
 
-На каждый активный заказ (создаются автоматически):
-
-- `sensor.*_<order>_status` — статус заказа (`assembling`, `performer_found`, `delivery_arrived`, …)
-- `sensor.*_<order>_eta` — минут до приезда курьера (`unavailable`, пока API не отдаёт ETA)
-- `binary_sensor.*_<order>_courier_nearby` — курьер рядом (`delivery_arrived` или ETA ≤ 5 мин)
+При нескольких заказах показывается «главный»: сначала с курьером рядом, иначе с наименьшим ETA.
 
 ### Автоматизация
 
-Курьер близко (без привязки к id заказа — ловит любой `*_courier_nearby`):
+Курьер близко — фиксированный `entity_id`, id заказа менять не нужно:
 
 ```yaml
 alias: Курьер рядом
-mode: single
 trigger:
-  - platform: event
-    event_type: state_changed
-condition:
-  - condition: template
-    value_template: >
-      {% set eid = trigger.event.data.entity_id %}
-      {{ eid.startswith('binary_sensor.')
-         and eid.endswith('_courier_nearby')
-         and trigger.event.data.new_state.state == 'on'
-         and trigger.event.data.old_state.state == 'off' }}
+  - platform: state
+    entity_id: binary_sensor.kiko_courier_nearby
+    from: "off"
+    to: "on"
 action:
-  - service: notify.mobile_app_phone
+  - service: notify.kikophone
     data:
       message: "Курьер Яндекс Еды почти у двери"
 ```
 
-Или по ETA (когда осталось ≤ 5 минут):
+Курьер через ≤ 5 минут:
 
 ```yaml
 alias: Курьер через 5 минут
-mode: single
 trigger:
-  - platform: event
-    event_type: state_changed
+  - platform: numeric_state
+    entity_id: sensor.kiko_courier_eta
+    below: 6
 condition:
   - condition: template
     value_template: >
-      {% set eid = trigger.event.data.entity_id %}
-      {% set new = trigger.event.data.new_state.state | int(-1) %}
-      {% set old = trigger.event.data.old_state.state | int(-1) %}
-      {{ eid.startswith('sensor.')
-         and eid.endswith('_eta')
-         and new >= 0 and new <= 5
-         and (old < 0 or old > 5) }}
+      {{ states('sensor.kiko_order_status') not in ['none', 'closed', 'unknown', 'unavailable'] }}
 action:
-  - service: notify.mobile_app_phone
+  - service: notify.kikophone
     data:
-      message: "Курьер будет через {{ trigger.event.data.new_state.state }} мин"
+      message: "Курьер через {{ states('sensor.kiko_courier_eta') }} мин"
 ```
 
 ### Настройки

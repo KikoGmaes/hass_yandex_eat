@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -8,11 +9,27 @@ from .coordinator import YandexEatCoordinator
 from .models import TrackedOrder
 
 
-class YandexEatEntity(CoordinatorEntity[YandexEatCoordinator]):
+class YandexEatAccountEntity(CoordinatorEntity[YandexEatCoordinator], Entity):
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: YandexEatCoordinator, order: TrackedOrder, suffix: str) -> None:
+    def __init__(self, coordinator: YandexEatCoordinator, suffix: str) -> None:
         super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.unique_id}_{suffix}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, coordinator.entry.entry_id)},
+            name=coordinator.entry.title,
+            manufacturer="Yandex",
+            model="Yandex Eat",
+        )
+
+    @property
+    def primary_order(self) -> TrackedOrder | None:
+        return self.coordinator.primary_order
+
+
+class YandexEatEntity(YandexEatAccountEntity):
+    def __init__(self, coordinator: YandexEatCoordinator, order: TrackedOrder, suffix: str) -> None:
+        super().__init__(coordinator, suffix)
         self._order_id = order.id
         self._attr_unique_id = f"{coordinator.entry.unique_id}_{order.id}_{suffix}"
         service_label = "Lavka" if order.service.value == "lavka" else "Eda"
@@ -33,3 +50,16 @@ class YandexEatEntity(CoordinatorEntity[YandexEatCoordinator]):
     def available(self) -> bool:
         order = self.order
         return order is not None and order.is_active
+
+
+def primary_order_attributes(
+    coordinator: YandexEatCoordinator,
+) -> dict:
+    order = coordinator.primary_order
+    if order is None:
+        return {"has_active_order": False}
+    attrs = coordinator.order_attributes(order)
+    attrs["has_active_order"] = True
+    attrs["order_id"] = order.id
+    attrs["short_order_id"] = order.short_order_id
+    return attrs
