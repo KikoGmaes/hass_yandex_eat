@@ -8,6 +8,7 @@ from .const import (
     ORDERS_INFO_BASE_URLS,
     ORDERS_INFO_PATH,
     SERVICE_BASE_URLS,
+    SERVICE_MARKET,
     TRACKED_ORDERS_PATH,
     TRACKING_V2_BASE_URLS,
     TRACKING_V2_PATH,
@@ -97,7 +98,12 @@ class YandexEatApi:
         return list(merged.values())
 
     async def async_get_recent_orders(self) -> list[OrderHistoryEntry]:
+        merged: dict[str, OrderHistoryEntry] = {}
+        ordered: list[str] = []
         for base in ORDERS_INFO_BASE_URLS:
+            default_service = (
+                Service.MARKET if base == SERVICE_BASE_URLS[SERVICE_MARKET] else Service.EDA
+            )
             url = f"{base}{ORDERS_INFO_PATH}"
             try:
                 data = await self._session.post_json(
@@ -113,9 +119,13 @@ class YandexEatApi:
             orders = data.get("orders")
             if not isinstance(orders, list):
                 continue
-            return [
-                OrderHistoryEntry.from_api(item, Service.EDA)
-                for item in orders
-                if isinstance(item, dict)
-            ]
-        return []
+            for item in orders:
+                if not isinstance(item, dict):
+                    continue
+                entry = OrderHistoryEntry.from_api(item, default_service)
+                if not entry.order_nr:
+                    continue
+                if entry.order_nr not in merged:
+                    ordered.append(entry.order_nr)
+                merged[entry.order_nr] = entry
+        return [merged[order_nr] for order_nr in ordered if order_nr in merged]

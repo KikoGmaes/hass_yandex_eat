@@ -13,6 +13,7 @@ from homeassistant.util import dt as dt_util
 from .const import STATE_NO_ORDER
 from .coordinator import YandexEatCoordinator
 from .entity import YandexEatAccountEntity, primary_order_attributes
+from .models import Service
 
 
 async def async_setup_entry(
@@ -26,6 +27,11 @@ async def async_setup_entry(
             YandexEatActiveOrdersSensor(coordinator),
             YandexEatOrderStatusSensor(coordinator),
             YandexEatCourierEtaSensor(coordinator),
+            YandexEatPastOrdersSensor(coordinator, Service.EDA, "past_orders_eda", "mdi:food"),
+            YandexEatPastOrdersSensor(
+                coordinator, Service.MARKET, "past_orders_delivery", "mdi:moped"
+            ),
+            YandexEatPastOrdersSensor(coordinator, Service.LAVKA, "past_orders_lavka", "mdi:cart"),
         ]
     )
 
@@ -120,3 +126,36 @@ class YandexEatCourierEtaSensor(YandexEatAccountEntity, SensorEntity):
                 dt_util.now() + timedelta(minutes=eta)
             ).isoformat()
         return attrs
+
+
+class YandexEatPastOrdersSensor(YandexEatAccountEntity, SensorEntity):
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: YandexEatCoordinator,
+        service: Service,
+        suffix: str,
+        icon: str,
+    ) -> None:
+        super().__init__(coordinator, suffix)
+        self._service = service
+        self._attr_translation_key = suffix
+        self._attr_icon = icon
+
+    @property
+    def native_value(self) -> int:
+        return sum(
+            1 for order in self.coordinator.recent_orders if order.service == self._service
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "orders": [
+                self.coordinator.recent_order_dict(order)
+                for order in self.coordinator.recent_orders
+                if order.service == self._service
+            ],
+            "total_recent_orders": len(self.coordinator.recent_orders),
+        }

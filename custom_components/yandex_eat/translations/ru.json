@@ -54,6 +54,15 @@
       },
       "courier_eta": {
         "name": "До курьера"
+      },
+      "past_orders_eda": {
+        "name": "Прошлые заказы Еда"
+      },
+      "past_orders_delivery": {
+        "name": "Прошлые заказы Деливери"
+      },
+      "past_orders_lavka": {
+        "name": "Прошлые заказы Лавка"
       }
     },
     "binary_sensor": {

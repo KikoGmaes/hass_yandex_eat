@@ -75,6 +75,37 @@ class OrderHistoryEntry:
     service: Service
     raw: dict[str, Any] = field(default_factory=dict)
 
+    @staticmethod
+    def detect_service(item: dict[str, Any], default: Service = Service.EDA) -> Service:
+        order_nr = str(item.get("order_nr", ""))
+        general = item.get("widgets", {}).get("general", {})
+        if not isinstance(general, dict):
+            general = {}
+
+        name = str(general.get("name", "")).lower()
+        business_type = str(
+            general.get("business_type", item.get("business_type", ""))
+        ).lower()
+        raw_blob = str(item).lower()
+
+        if order_nr.endswith("-grocery"):
+            return Service.LAVKA
+        if "лавка" in name or "lavka" in name:
+            return Service.LAVKA
+        if business_type in {"shop", "store", "grocery", "lavka"}:
+            return Service.LAVKA
+        if "lavka.yandex" in raw_blob or "/lavka/" in raw_blob:
+            return Service.LAVKA
+
+        if "деливери" in name or "delivery club" in name:
+            return Service.MARKET
+        if business_type in {"delivery", "dc", "market"}:
+            return Service.MARKET
+        if "market-delivery" in raw_blob or "/dc/" in raw_blob:
+            return Service.MARKET
+
+        return default
+
     @classmethod
     def from_api(cls, item: dict[str, Any], service: Service = Service.EDA) -> OrderHistoryEntry:
         general = item.get("widgets", {}).get("general", {})
@@ -88,7 +119,7 @@ class OrderHistoryEntry:
             date=str(general.get("date", "")),
             status=str(status_text),
             cost=general.get("cost_value"),
-            service=service,
+            service=cls.detect_service(item, service),
             raw=item,
         )
 

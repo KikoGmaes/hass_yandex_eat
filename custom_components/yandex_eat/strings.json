@@ -47,13 +47,19 @@
         "name": "Active orders"
       },
       "order_status": {
-        "name": "Status",
-        "state": {
-          "none": "No active order"
-        }
+        "name": "Status"
       },
       "courier_eta": {
         "name": "Courier ETA"
+      },
+      "past_orders_eda": {
+        "name": "Past orders Eda"
+      },
+      "past_orders_delivery": {
+        "name": "Past orders Delivery"
+      },
+      "past_orders_lavka": {
+        "name": "Past orders Lavka"
       }
     },
     "binary_sensor": {
