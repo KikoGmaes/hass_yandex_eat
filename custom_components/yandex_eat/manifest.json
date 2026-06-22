@@ -1,0 +1,12 @@
+{
+  "domain": "yandex_eat",
+  "name": "Yandex Eat",
+  "codeowners": ["@KikoGmaes"],
+  "config_flow": true,
+  "documentation": "https://github.com/KikoGmaes/hass_yandex_eat",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/KikoGmaes/hass_yandex_eat/issues",
+  "requirements": [],
+  "version": "0.2.0"
+}

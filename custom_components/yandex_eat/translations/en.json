@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Yandex Eat",
+        "description": "Track Yandex Eda, Delivery and Lavka orders. You can add multiple accounts.",
+        "data": {
+          "method": "Authorization method"
+        }
+      },
+      "qr": {
+        "title": "Scan QR code",
+        "description": "Open the Yandex app, go to profile → add account → scan QR.\n\nLink: {qr_url}\n\n{qr_data}"
+      },
+      "token": {
+        "title": "X-Token",
+        "description": "Paste your Yandex x-token (same as Yandex Station integration)."
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate",
+        "description": "Your token expired. Paste a new x-token."
+      }
+    },
+    "error": {
+      "unauthorised": "Authorization not completed. Try again.",
+      "invalid_token": "Invalid token."
+    },
+    "abort": {
+      "already_configured": "This account is already configured. Token updated.",
+      "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Yandex Eat options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "active_orders": {
+        "name": "Active orders"
+      },
+      "order_status": {
+        "name": "Status"
+      }
+    },
+    "binary_sensor": {
+      "courier_nearby": {
+        "name": "Courier nearby"
+      }
+    }
+  }
+}

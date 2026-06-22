@@ -1,0 +1,59 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Yandex Eat",
+        "description": "Отслеживание заказов Яндекс Еда, Деливери и Лавка. Можно добавить несколько аккаунтов.",
+        "data": {
+          "method": "Способ авторизации"
+        }
+      },
+      "qr": {
+        "title": "QR-код",
+        "description": "Откройте приложение Яндекс → профиль → добавить аккаунт → сканировать QR.\n\nСсылка: {qr_url}\n\n{qr_data}"
+      },
+      "token": {
+        "title": "X-Token",
+        "description": "Вставьте x-token Яндекса (тот же, что в интеграции Yandex Station)."
+      },
+      "reauth_confirm": {
+        "title": "Повторная авторизация",
+        "description": "Токен истёк. Вставьте новый x-token."
+      }
+    },
+    "error": {
+      "unauthorised": "Авторизация не завершена. Попробуйте снова.",
+      "invalid_token": "Неверный токен."
+    },
+    "abort": {
+      "already_configured": "Этот аккаунт уже добавлен. Токен обновлён.",
+      "account_updated": "Токен аккаунта обновлён.",
+      "reauth_successful": "Повторная авторизация успешна."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Настройки Yandex Eat",
+        "data": {
+          "scan_interval": "Интервал опроса (секунды)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "active_orders": {
+        "name": "Активные заказы"
+      },
+      "order_status": {
+        "name": "Статус"
+      }
+    },
+    "binary_sensor": {
+      "courier_nearby": {
+        "name": "Курьер рядом"
+      }
+    }
+  }
+}
