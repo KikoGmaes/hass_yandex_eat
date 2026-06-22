@@ -28,6 +28,7 @@
 - `sensor.*_order_status` — статус заказа (`none` если заказов нет)
 - `sensor.*_courier_eta` — минут до курьера (`unknown`, пока нет ETA)
 - `binary_sensor.*_courier_nearby` — курьер рядом (`off`, если заказов нет)
+- `sensor.*_past_orders_eda` / `*_past_orders_delivery` / `*_past_orders_lavka` — число заказов в истории по сервису (с пагинацией API, до ~2000)
 
 При нескольких заказах показывается «главный»: сначала с курьером рядом, иначе с наименьшим ETA.
 

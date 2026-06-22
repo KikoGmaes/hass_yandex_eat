@@ -11,6 +11,12 @@ STATE_NO_ORDER = "none"
 TRACKED_ORDERS_PATH = "/api/v1/providers/orders/v1/tracked-orders"
 TRACKING_V2_PATH = "/api/v2/orders/tracking"
 ORDERS_INFO_PATH = "/eats/v1/orders-info/v1/orders"
+ORDER_HISTORY_PATHS = (
+    "/eats/v1/eats-order-history/v1/orders/list",
+    "/eats/v1/eats-order-history/v1/orders/history",
+)
+ORDER_HISTORY_PAGE_SIZE = 50
+ORDER_HISTORY_MAX_PAGES = 40
 
 SERVICE_EDA = "eda"
 SERVICE_LAVKA = "lavka"

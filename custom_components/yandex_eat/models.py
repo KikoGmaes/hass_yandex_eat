@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+EDA_ORDER_NR_RE = re.compile(r"^\d{6}-\d+$")
 
 
 class Service(StrEnum):
@@ -90,6 +93,8 @@ class OrderHistoryEntry:
 
         if order_nr.endswith("-grocery"):
             return Service.LAVKA
+        if EDA_ORDER_NR_RE.match(order_nr):
+            return Service.EDA
         if "лавка" in name or "lavka" in name:
             return Service.LAVKA
         if business_type in {"shop", "store", "grocery", "lavka"}:
