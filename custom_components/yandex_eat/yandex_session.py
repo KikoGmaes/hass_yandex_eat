@@ -1,15 +1,24 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import Any
 
 import aiohttp
-
 from homeassistant.exceptions import ConfigEntryAuthFailed
 
+from .const import YANDEX_LOGIN_RETPATH
+
 _LOGGER = logging.getLogger(__name__)
+
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ru-RU,ru;q=0.9",
+}
 
 
 class LoginResponse:
@@ -129,15 +138,50 @@ class YandexSession:
     async def refresh_cookies(self) -> bool:
         if not self.x_token:
             return False
-        async with self._session.get("https://yandex.ru/quasar?storage=1") as r:
+        expected_uid = await self._token_uid()
+        if expected_uid is None:
+            return False
+
+        async with self._session.get(
+            "https://yandex.ru/quasar?storage=1",
+            headers=DEFAULT_HEADERS,
+        ) as r:
             resp = await r.json()
-        if resp.get("storage", {}).get("user", {}).get("uid"):
+        actual_uid = str(resp.get("storage", {}).get("user", {}).get("uid") or "")
+        if actual_uid == expected_uid:
             return True
-        return await self._login_token(self.x_token)
+        if not await self._login_token(self.x_token):
+            return False
+
+        async with self._session.get(
+            "https://yandex.ru/quasar?storage=1",
+            headers=DEFAULT_HEADERS,
+        ) as r:
+            resp = await r.json()
+        actual_uid = str(resp.get("storage", {}).get("user", {}).get("uid") or "")
+        return actual_uid == expected_uid
+
+    async def _token_uid(self) -> str | None:
+        if not self.x_token:
+            return None
+        async with self._session.get(
+            "https://mobileproxy.passport.yandex.net/1/bundle/account/short_info/?avatar_size=islands-300",
+            headers={"Authorization": f"OAuth {self.x_token}"},
+        ) as r:
+            resp = await r.json()
+        if resp.get("status") != "ok":
+            _LOGGER.error("short_info failed: %s", resp)
+            return None
+        uid = resp.get("uid")
+        return str(uid) if uid is not None else None
 
     async def _login_token(self, x_token: str) -> bool:
-        payload = {"type": "x-token", "retpath": "https://www.yandex.ru"}
-        headers = {"Ya-Consumer-Authorization": f"OAuth {x_token}"}
+        payload = {"type": "x-token", "retpath": YANDEX_LOGIN_RETPATH}
+        headers = {
+            **DEFAULT_HEADERS,
+            "Ya-Consumer-Authorization": f"OAuth {x_token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
         async with self._session.post(
             "https://mobileproxy.passport.yandex.net/1/bundle/auth/x_token/",
             data=payload,
@@ -166,11 +210,53 @@ class YandexSession:
         url: str,
         *,
         params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        empty_statuses: frozenset[int] | None = None,
+    ) -> Any:
+        return await self._request_json(
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            empty_statuses=empty_statuses,
+        )
+
+    async def post_json(
+        self,
+        url: str,
+        body: dict[str, Any] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        empty_statuses: frozenset[int] | None = None,
+    ) -> Any:
+        return await self._request_json(
+            "POST",
+            url,
+            json_body=body or {},
+            headers=headers,
+            empty_statuses=empty_statuses,
+        )
+
+    async def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         empty_statuses: frozenset[int] | None = None,
     ) -> Any:
         empty_statuses = empty_statuses or frozenset()
+        request_headers = {**DEFAULT_HEADERS, **(headers or {})}
         for attempt in range(2):
-            async with self._session.get(url, params=params) as r:
+            async with self._session.request(
+                method,
+                url,
+                params=params,
+                json=json_body,
+                headers=request_headers,
+            ) as r:
                 if r.status == 401 and attempt == 0 and self.x_token:
                     if await self.refresh_cookies():
                         continue
@@ -178,7 +264,7 @@ class YandexSession:
                 if r.status in empty_statuses and r.content_length in (0, None):
                     text = await r.text()
                     if not text:
-                        return []
+                        return [] if method == "GET" else {}
                 if r.status != 200:
                     raise aiohttp.ClientResponseError(
                         r.request_info,
@@ -190,6 +276,6 @@ class YandexSession:
                 if r.content_length in (0, None):
                     text = await r.text()
                     if not text:
-                        return []
+                        return [] if method == "GET" else {}
                 return await r.json()
         raise RuntimeError(f"failed to fetch {url}")

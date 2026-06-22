@@ -44,7 +44,7 @@ class YandexEatEntity(YandexEatAccountEntity):
 
     @property
     def order(self) -> TrackedOrder | None:
-        return self.coordinator.data.get(self._order_id)
+        return self.coordinator.data.orders.get(self._order_id)
 
     @property
     def available(self) -> bool:
@@ -56,9 +56,18 @@ def primary_order_attributes(
     coordinator: YandexEatCoordinator,
 ) -> dict:
     order = coordinator.primary_order
+    attrs: dict = {
+        "recent_orders": [
+            coordinator.recent_order_dict(item) for item in coordinator.recent_orders
+        ],
+    }
+    last_order = coordinator.last_order
+    if last_order is not None:
+        attrs["last_order"] = coordinator.recent_order_dict(last_order)
     if order is None:
-        return {"has_active_order": False}
-    attrs = coordinator.order_attributes(order)
+        attrs["has_active_order"] = False
+        return attrs
+    attrs.update(coordinator.order_attributes(order))
     attrs["has_active_order"] = True
     attrs["order_id"] = order.id
     attrs["short_order_id"] = order.short_order_id

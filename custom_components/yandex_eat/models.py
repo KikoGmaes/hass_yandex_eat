@@ -8,6 +8,7 @@ from typing import Any
 class Service(StrEnum):
     EDA = "eda"
     LAVKA = "lavka"
+    MARKET = "market"
 
 
 class OrderStatus(StrEnum):
@@ -65,6 +66,34 @@ class TrackingInfo:
 
 
 @dataclass
+class OrderHistoryEntry:
+    order_nr: str
+    name: str
+    date: str
+    status: str
+    cost: str | None
+    service: Service
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, item: dict[str, Any], service: Service = Service.EDA) -> OrderHistoryEntry:
+        general = item.get("widgets", {}).get("general", {})
+        if not isinstance(general, dict):
+            general = {}
+        status = general.get("status", {})
+        status_text = status.get("text") if isinstance(status, dict) else str(status or "")
+        return cls(
+            order_nr=str(item.get("order_nr", "")),
+            name=str(general.get("name", "")),
+            date=str(general.get("date", "")),
+            status=str(status_text),
+            cost=general.get("cost_value"),
+            service=service,
+            raw=item,
+        )
+
+
+@dataclass
 class TrackedOrder:
     id: str
     status: str
@@ -97,8 +126,41 @@ class TrackedOrder:
         return cls(
             id=str(item.get("id", "")),
             status=str(item.get("status", "unknown")),
-            short_order_id=item.get("shortOrderId"),
+            short_order_id=item.get("shortOrderId") or item.get("short_order_id"),
             tracking_info=TrackingInfo.from_raw(item.get("trackingInfo") or item.get("tracking_info")),
+            service=service,
+            raw=item,
+        )
+
+    @classmethod
+    def from_api_v2(cls, item: dict[str, Any], service: Service) -> TrackedOrder:
+        order = item.get("order") if isinstance(item.get("order"), dict) else item
+        order_id = (
+            order.get("id")
+            or order.get("orderId")
+            or order.get("order_id")
+            or item.get("id")
+            or item.get("orderId")
+        )
+        status = (
+            order.get("status")
+            or order.get("orderStatus")
+            or item.get("status")
+            or "unknown"
+        )
+        tracking = (
+            order.get("trackingInfo")
+            or order.get("tracking_info")
+            or item.get("trackingInfo")
+            or item.get("tracking_info")
+        )
+        return cls(
+            id=str(order_id or ""),
+            status=str(status),
+            short_order_id=order.get("shortOrderId")
+            or order.get("short_order_id")
+            or item.get("shortOrderId"),
+            tracking_info=TrackingInfo.from_raw(tracking if isinstance(tracking, dict) else None),
             service=service,
             raw=item,
         )

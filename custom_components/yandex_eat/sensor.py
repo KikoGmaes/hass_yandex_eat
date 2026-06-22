@@ -43,7 +43,7 @@ class YandexEatActiveOrdersSensor(YandexEatAccountEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return {
+        attrs: dict[str, Any] = {
             "orders": [
                 {
                     "id": order.id,
@@ -58,8 +58,16 @@ class YandexEatActiveOrdersSensor(YandexEatAccountEntity, SensorEntity):
                     ),
                 }
                 for order in self.coordinator.active_orders
-            ]
+            ],
+            "recent_orders": [
+                self.coordinator.recent_order_dict(order)
+                for order in self.coordinator.recent_orders
+            ],
         }
+        last_order = self.coordinator.last_order
+        if last_order is not None:
+            attrs["last_order"] = self.coordinator.recent_order_dict(last_order)
+        return attrs
 
 
 class YandexEatOrderStatusSensor(YandexEatAccountEntity, SensorEntity):
