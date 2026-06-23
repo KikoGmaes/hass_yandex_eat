@@ -2,11 +2,25 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 EDA_ORDER_NR_RE = re.compile(r"^\d{6}-\d+$")
 ORDER_YEAR_RE = re.compile(r",\s*(20\d{2})\s*$")
+ETA_TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
+ACTIVE_STATUS_MARKERS = (
+    "в работе",
+    "in progress",
+    "готов",
+    "приготов",
+    "курьер",
+    "дороге",
+    "ожида",
+    "собира",
+    "assembling",
+    "performer",
+)
 
 
 def parse_order_cost(cost: str | None) -> float:
@@ -30,6 +44,55 @@ def parse_order_year(order_nr: str, date: str, *, fallback_year: int) -> int:
 def is_cancelled_order(status: str) -> bool:
     lowered = status.lower()
     return "отмен" in lowered or "cancel" in lowered
+
+
+def is_delivered_order(status: str) -> bool:
+    lowered = status.lower()
+    return "доставлен" in lowered or "delivered" in lowered
+
+
+def parse_eta_minutes_from_title(title: str | None) -> int | None:
+    if not title:
+        return None
+    match = ETA_TIME_RE.search(title)
+    if not match:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    now = datetime.now()
+    eta = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if eta <= now:
+        return 0
+    return int((eta - now).total_seconds() // 60)
+
+
+def order_status_text(item: dict[str, Any]) -> str:
+    general = item.get("widgets", {}).get("general", {})
+    if not isinstance(general, dict):
+        general = {}
+    status = general.get("status", {})
+    if isinstance(status, dict):
+        return str(status.get("text") or "")
+    return str(status or "")
+
+
+def is_active_orders_info_item(item: dict[str, Any], order_nrs_to_update: set[str]) -> bool:
+    order_nr = str(item.get("order_nr", ""))
+    if not order_nr:
+        return False
+    if order_nr in order_nrs_to_update:
+        return True
+    widgets = item.get("widgets", {})
+    if not isinstance(widgets, dict):
+        return False
+    if widgets.get("progress_bar_tracking"):
+        return True
+    status_text = order_status_text(item)
+    if is_cancelled_order(status_text) or is_delivered_order(status_text):
+        return False
+    if not status_text.strip():
+        return True
+    lowered = status_text.lower()
+    return any(marker in lowered for marker in ACTIVE_STATUS_MARKERS)
 
 
 class Service(StrEnum):
@@ -90,6 +153,35 @@ class TrackingInfo:
             courier_position=courier_position,
             raw=raw,
         )
+
+    @classmethod
+    def from_progress_bar(cls, progress: dict[str, Any] | None) -> TrackingInfo | None:
+        if not isinstance(progress, dict):
+            return None
+        remaining_time = parse_eta_minutes_from_title(progress.get("title"))
+        return cls(
+            remaining_time=remaining_time,
+            raw=progress,
+        )
+
+    @classmethod
+    def from_desktop_tracking(cls, raw: dict[str, Any] | None) -> TrackingInfo | None:
+        if not isinstance(raw, dict):
+            return None
+        for key in ("tracking_info", "trackingInfo", "payload", "order"):
+            nested = raw.get(key)
+            if isinstance(nested, dict):
+                info = cls.from_raw(nested)
+                if info and info.remaining_time is not None:
+                    return info
+        info = cls.from_raw(raw)
+        if info and (info.remaining_time is not None or info.courier_position):
+            return info
+        for key in ("title", "eta_text", "etaText", "subtitle"):
+            remaining_time = parse_eta_minutes_from_title(str(raw.get(key) or ""))
+            if remaining_time is not None:
+                return cls(remaining_time=remaining_time, raw=raw)
+        return None
 
 
 @dataclass
@@ -181,6 +273,58 @@ class TrackedOrder:
             service=service,
             raw=item,
         )
+
+    @classmethod
+    def from_orders_info(
+        cls,
+        item: dict[str, Any],
+        service: Service,
+        *,
+        desktop_tracking: dict[str, Any] | None = None,
+    ) -> TrackedOrder | None:
+        order_nr = str(item.get("order_nr", ""))
+        if not order_nr:
+            return None
+        widgets = item.get("widgets", {})
+        if not isinstance(widgets, dict):
+            widgets = {}
+        progress = widgets.get("progress_bar_tracking")
+        tracking_info = TrackingInfo.from_desktop_tracking(desktop_tracking)
+        if tracking_info is None and isinstance(progress, dict):
+            tracking_info = TrackingInfo.from_progress_bar(progress)
+        status = cls._status_from_orders_info(item, progress if isinstance(progress, dict) else None)
+        short_id = order_nr.split("-", 1)[-1]
+        return cls(
+            id=order_nr,
+            status=status,
+            short_order_id=short_id[:12],
+            tracking_info=tracking_info,
+            service=service,
+            raw={"orders_info": item, "desktop_tracking": desktop_tracking or {}},
+        )
+
+    @staticmethod
+    def _status_from_orders_info(
+        item: dict[str, Any],
+        progress: dict[str, Any] | None,
+    ) -> str:
+        if isinstance(progress, dict):
+            bar = progress.get("progress_bar")
+            if isinstance(bar, dict):
+                active_steps = bar.get("active_steps_amount")
+                total_steps = bar.get("steps_amount")
+                if isinstance(active_steps, int) and isinstance(total_steps, int) and total_steps > 0:
+                    if active_steps >= total_steps:
+                        return OrderStatus.DELIVERY_ARRIVED
+                    if active_steps >= max(1, total_steps - 1):
+                        return OrderStatus.PERFORMER_FOUND
+                    return OrderStatus.ASSEMBLING
+        status_text = order_status_text(item).lower()
+        if "курьер" in status_text or "дороге" in status_text or "performer" in status_text:
+            return OrderStatus.PERFORMER_FOUND
+        if "прибыл" in status_text or "arrived" in status_text:
+            return OrderStatus.DELIVERY_ARRIVED
+        return OrderStatus.ASSEMBLING
 
     @classmethod
     def from_api_v2(cls, item: dict[str, Any], service: Service) -> TrackedOrder:

@@ -7,16 +7,24 @@ from .const import (
     EMPTY_HTTP_STATUSES,
     ORDER_HISTORY_PLATFORM_DC,
     ORDER_HISTORY_PLATFORM_EDA,
+    ORDER_TRACKING_PLATFORM_DC,
     ORDERS_INFO_BASE_URL,
     ORDERS_INFO_MAX_PAGES,
     ORDERS_INFO_PAGE_LIMIT,
     ORDERS_INFO_PATH,
     SERVICE_BASE_URLS,
     TRACKED_ORDERS_PATH,
+    TRACKING_DESKTOP_PATH,
     TRACKING_V2_BASE_URLS,
     TRACKING_V2_PATH,
 )
-from .models import EDA_ORDER_NR_RE, OrderHistoryEntry, Service, TrackedOrder
+from .models import (
+    EDA_ORDER_NR_RE,
+    OrderHistoryEntry,
+    Service,
+    TrackedOrder,
+    is_active_orders_info_item,
+)
 from .yandex_session import YandexSession
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,6 +39,14 @@ def _service_headers(base: str) -> dict[str, str]:
     return {"Origin": base, "Referer": f"{base}/"}
 
 
+def _desktop_tracking_headers(base: str) -> dict[str, str]:
+    return {
+        **_service_headers(base),
+        "X-Platform": ORDER_TRACKING_PLATFORM_DC,
+        "Content-Type": "application/json",
+    }
+
+
 def _extract_orders_payload(data: Any) -> list[dict[str, Any]]:
     if not isinstance(data, dict):
         return []
@@ -43,6 +59,16 @@ def _extract_orders_payload(data: Any) -> list[dict[str, Any]]:
 def _pagination_settings(data: dict[str, Any]) -> dict[str, Any]:
     ps = data.get("pagination_settings")
     return ps if isinstance(ps, dict) else {}
+
+
+def _order_nrs_to_update(data: dict[str, Any]) -> set[str]:
+    update_settings = data.get("update_settings")
+    if not isinstance(update_settings, dict):
+        return set()
+    raw = update_settings.get("order_nrs_to_update")
+    if not isinstance(raw, list):
+        return set()
+    return {str(order_nr) for order_nr in raw if order_nr}
 
 
 def _insert_order_nr(ordered: list[str], order_nr: str) -> None:
@@ -121,7 +147,89 @@ class YandexEatApi:
         for order in await self.async_get_tracked_orders_v2(service):
             if order.id:
                 merged[order.id] = order
+        if service == Service.MARKET:
+            await self._async_merge_orders_info_active(service, merged)
         return list(merged.values())
+
+    async def async_get_desktop_tracking(
+        self,
+        service: Service,
+        order_nr: str,
+    ) -> dict[str, Any] | None:
+        base = SERVICE_BASE_URLS[service.value]
+        url = f"{base}{TRACKING_DESKTOP_PATH}"
+        headers = _desktop_tracking_headers(base)
+        try:
+            data = await self._session.get_json(
+                url,
+                params={"order_nr": order_nr},
+                headers=headers,
+                empty_statuses=frozenset({404}),
+            )
+            if isinstance(data, dict) and data:
+                return data
+        except Exception as err:
+            _LOGGER.debug("desktop tracking GET failed for %s: %s", order_nr, err)
+        try:
+            data = await self._session.post_json(
+                url,
+                {"order_nr": order_nr},
+                headers=headers,
+                empty_statuses=frozenset({404}),
+            )
+            if isinstance(data, dict) and data:
+                return data
+        except Exception as err:
+            _LOGGER.debug("desktop tracking POST failed for %s: %s", order_nr, err)
+        return None
+
+    async def _async_merge_orders_info_active(
+        self,
+        service: Service,
+        merged: dict[str, TrackedOrder],
+    ) -> None:
+        base = SERVICE_BASE_URLS[service.value]
+        data = await self._async_get_orders_info_page(
+            platform=ORDER_HISTORY_PLATFORM_DC,
+            cursor=None,
+            base_url=base,
+        )
+        if not data:
+            return
+
+        items = _extract_orders_payload(data)
+        if not items:
+            return
+
+        order_nrs_to_update = _order_nrs_to_update(data)
+        items_by_nr = {
+            str(item.get("order_nr")): item
+            for item in items
+            if isinstance(item, dict) and item.get("order_nr")
+        }
+        active_nrs = {
+            order_nr
+            for order_nr, item in items_by_nr.items()
+            if is_active_orders_info_item(item, order_nrs_to_update)
+        }
+        if not active_nrs:
+            return
+
+        for order_nr in active_nrs:
+            existing = merged.get(order_nr)
+            if existing is not None and existing.is_active:
+                continue
+            item = items_by_nr.get(order_nr)
+            if not isinstance(item, dict):
+                continue
+            desktop_tracking = await self.async_get_desktop_tracking(service, order_nr)
+            tracked = TrackedOrder.from_orders_info(
+                item,
+                service,
+                desktop_tracking=desktop_tracking,
+            )
+            if tracked is not None:
+                merged[order_nr] = tracked
 
     async def async_get_all_tracked_orders(self) -> list[TrackedOrder]:
         merged: dict[str, TrackedOrder] = {}
@@ -136,14 +244,15 @@ class YandexEatApi:
         *,
         platform: str,
         cursor: str | None,
+        base_url: str = ORDERS_INFO_BASE_URL,
     ) -> dict[str, Any] | None:
         pagination_settings: dict[str, Any] = {"limit": ORDERS_INFO_PAGE_LIMIT}
         if cursor:
             pagination_settings["cursor"] = cursor
         body = {"pagination_settings": pagination_settings}
-        url = f"{ORDERS_INFO_BASE_URL}{ORDERS_INFO_PATH}"
+        url = f"{base_url}{ORDERS_INFO_PATH}"
         headers = {
-            **_service_headers(ORDERS_INFO_BASE_URL),
+            **_service_headers(base_url),
             "Content-Type": "application/json",
             "X-Platform": platform,
         }
