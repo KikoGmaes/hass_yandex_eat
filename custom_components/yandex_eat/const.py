@@ -11,12 +11,8 @@ STATE_NO_ORDER = "none"
 TRACKED_ORDERS_PATH = "/api/v1/providers/orders/v1/tracked-orders"
 TRACKING_V2_PATH = "/api/v2/orders/tracking"
 ORDERS_INFO_PATH = "/eats/v1/orders-info/v1/orders"
-ORDER_HISTORY_PATHS = (
-    "/eats/v1/eats-order-history/v1/orders/list",
-    "/eats/v1/eats-order-history/v1/orders/history",
-)
-ORDER_HISTORY_PAGE_SIZE = 50
-ORDER_HISTORY_MAX_PAGES = 40
+ORDERS_INFO_PAGE_LIMIT = 50
+ORDERS_INFO_MAX_PAGES = 20
 
 SERVICE_EDA = "eda"
 SERVICE_LAVKA = "lavka"
@@ -31,7 +27,6 @@ SERVICE_BASE_URLS = {
 # Hosts that share the same eats orders-info / v2 tracking API surface.
 ORDERS_INFO_BASE_URLS = (
     SERVICE_BASE_URLS[SERVICE_EDA],
-    SERVICE_BASE_URLS[SERVICE_MARKET],
 )
 
 TRACKING_V2_BASE_URLS = (
@@ -39,6 +34,6 @@ TRACKING_V2_BASE_URLS = (
     SERVICE_BASE_URLS[SERVICE_MARKET],
 )
 
-YANDEX_LOGIN_RETPATH = "https://eda.yandex.ru"
+YANDEX_LOGIN_RETPATH = "https://market-delivery.yandex.ru"
 
 EMPTY_HTTP_STATUSES = frozenset({424})

@@ -5,11 +5,10 @@ from typing import Any
 
 from .const import (
     EMPTY_HTTP_STATUSES,
-    ORDER_HISTORY_MAX_PAGES,
-    ORDER_HISTORY_PAGE_SIZE,
-    ORDER_HISTORY_PATHS,
     ORDERS_INFO_BASE_URLS,
     ORDERS_INFO_PATH,
+    ORDERS_INFO_PAGE_LIMIT,
+    ORDERS_INFO_MAX_PAGES,
     SERVICE_BASE_URLS,
     SERVICE_MARKET,
     TRACKED_ORDERS_PATH,
@@ -32,60 +31,12 @@ def _extract_orders_payload(data: Any) -> list[dict[str, Any]]:
     orders = data.get("orders")
     if isinstance(orders, list):
         return [item for item in orders if isinstance(item, dict)]
-    payload = data.get("payload")
-    if isinstance(payload, dict):
-        for key in ("orders", "order_list", "orderList"):
-            nested = payload.get(key)
-            if isinstance(nested, list):
-                return [item for item in nested if isinstance(item, dict)]
     return []
 
 
-def _pagination_has_more(data: dict[str, Any], *, page_size: int, items_count: int) -> bool:
-    for container in (data, data.get("payload"), data.get("meta")):
-        if not isinstance(container, dict):
-            continue
-        pagination = container.get("pagination")
-        if not isinstance(pagination, dict):
-            continue
-        has_more = pagination.get("has_more")
-        if has_more is None:
-            has_more = pagination.get("hasMore")
-        if has_more is not None:
-            return bool(has_more)
-        for key in ("cursor", "next_cursor", "nextCursor", "next"):
-            if pagination.get(key):
-                return True
-    for key in ("cursor", "next_cursor", "nextCursor", "next"):
-        if data.get(key):
-            return True
-    return items_count >= page_size
-
-
-def _pagination_cursor(
-    data: dict[str, Any],
-    *,
-    items: list[dict[str, Any]] | None = None,
-    allow_order_offset: bool = False,
-) -> str | None:
-    for container in (data, data.get("payload"), data.get("meta")):
-        if not isinstance(container, dict):
-            continue
-        pagination = container.get("pagination")
-        if isinstance(pagination, dict):
-            for key in ("cursor", "next_cursor", "nextCursor", "next"):
-                value = pagination.get(key)
-                if value:
-                    return str(value)
-    for key in ("cursor", "next_cursor", "nextCursor", "next"):
-        value = data.get(key)
-        if value:
-            return str(value)
-    if allow_order_offset and items:
-        last_order_nr = items[-1].get("order_nr")
-        if last_order_nr:
-            return f"offset:{last_order_nr}"
-    return None
+def _pagination_settings(data: dict[str, Any]) -> dict[str, Any]:
+    ps = data.get("pagination_settings")
+    return ps if isinstance(ps, dict) else {}
 
 
 class YandexEatApi:
@@ -162,55 +113,37 @@ class YandexEatApi:
                     merged[order.id] = order
         return list(merged.values())
 
-    async def _async_fetch_order_history_page(
+    async def _async_get_orders_info_page(
         self,
         base: str,
-        path: str,
         *,
         cursor: str | None,
-        page_size: int,
     ) -> dict[str, Any] | None:
-        pagination: dict[str, Any] = {"limit": page_size}
+        pagination_settings: dict[str, Any] = {"limit": ORDERS_INFO_PAGE_LIMIT}
         if cursor:
-            pagination["cursor"] = cursor
-        bodies = (
-            {"pagination": pagination},
-            {"limit": page_size, "cursor": cursor} if cursor else {"limit": page_size},
-            {} if cursor is None else None,
-        )
-        url = f"{base}{path}"
+            pagination_settings["cursor"] = cursor
+        body = {"pagination_settings": pagination_settings}
+        url = f"{base}{ORDERS_INFO_PATH}"
         headers = {**_service_headers(base), "Content-Type": "application/json"}
-        for body in bodies:
-            if body is None:
-                continue
-            try:
-                data = await self._session.post_json(url, body, headers=headers)
-            except Exception as err:
-                _LOGGER.debug("order history page failed for %s%s: %s", base, path, err)
-                continue
-            if isinstance(data, dict):
-                return data
-        return None
+        try:
+            data = await self._session.post_json(url, body, headers=headers)
+        except Exception as err:
+            _LOGGER.debug("orders-info failed for %s: %s", base, err)
+            return None
+        return data if isinstance(data, dict) else None
 
-    async def _async_get_orders_from_endpoint(
+    async def _async_get_orders_from_base(
         self,
         base: str,
-        path: str,
         *,
         default_service: Service,
     ) -> list[OrderHistoryEntry]:
         merged: dict[str, OrderHistoryEntry] = {}
         ordered: list[str] = []
         cursor: str | None = None
-        allow_order_offset = "eats-order-history" in path
 
-        for _ in range(ORDER_HISTORY_MAX_PAGES):
-            data = await self._async_fetch_order_history_page(
-                base,
-                path,
-                cursor=cursor,
-                page_size=ORDER_HISTORY_PAGE_SIZE,
-            )
+        for page in range(ORDERS_INFO_MAX_PAGES):
+            data = await self._async_get_orders_info_page(base, cursor=cursor)
             if not data:
                 break
 
@@ -226,20 +159,16 @@ class YandexEatApi:
                     ordered.append(entry.order_nr)
                 merged[entry.order_nr] = entry
 
-            next_cursor = _pagination_cursor(
-                data,
-                items=items,
-                allow_order_offset=allow_order_offset,
-            )
-            if not _pagination_has_more(
-                data,
-                page_size=ORDER_HISTORY_PAGE_SIZE,
-                items_count=len(items),
-            ):
+            ps = _pagination_settings(data)
+            has_more = ps.get("has_more")
+            if has_more is None:
+                has_more = ps.get("hasMore")
+            next_cursor = ps.get("cursor")
+            if not has_more:
                 break
             if not next_cursor or next_cursor == cursor:
                 break
-            cursor = next_cursor
+            cursor = str(next_cursor)
 
         return [merged[order_nr] for order_nr in ordered if order_nr in merged]
 
@@ -250,19 +179,14 @@ class YandexEatApi:
             default_service = (
                 Service.MARKET if base == SERVICE_BASE_URLS[SERVICE_MARKET] else Service.EDA
             )
-            page_orders: list[OrderHistoryEntry] = []
-            for path in (*ORDER_HISTORY_PATHS, ORDERS_INFO_PATH):
-                try:
-                    page_orders = await self._async_get_orders_from_endpoint(
-                        base,
-                        path,
-                        default_service=default_service,
-                    )
-                except Exception as err:
-                    _LOGGER.debug("order history failed for %s%s: %s", base, path, err)
-                    continue
-                if page_orders:
-                    break
+            try:
+                page_orders = await self._async_get_orders_from_base(
+                    base,
+                    default_service=default_service,
+                )
+            except Exception as err:
+                _LOGGER.debug("order history failed for %s: %s", base, err)
+                continue
 
             for entry in page_orders:
                 if entry.order_nr not in merged:

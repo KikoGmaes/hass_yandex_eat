@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from typing import Any
@@ -12,13 +13,19 @@ from .const import YANDEX_LOGIN_RETPATH
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "android (3.80.0)",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "ru-RU,ru;q=0.9",
+    "X-Platform": "android_app",
+    "X-App-Version": "18.9.1",
 }
+
+
+def _device_id(x_token: str | None) -> str:
+    if not x_token:
+        return "yandex-eat-ha"
+    digest = hashlib.sha256(x_token.encode()).hexdigest()
+    return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
 
 
 class LoginResponse:
@@ -54,6 +61,10 @@ class YandexSession:
         self.x_token = x_token
         self.auth_headers: dict[str, str] | None = None
         self.auth_json: dict[str, Any] | None = None
+        self._request_headers = {
+            **DEFAULT_HEADERS,
+            "X-Device-Id": _device_id(x_token),
+        }
 
     async def get_qr(self) -> str:
         async with self._session.get("https://passport.yandex.ru/pwl-yandex") as r:
@@ -142,20 +153,12 @@ class YandexSession:
         if expected_uid is None:
             return False
 
-        async with self._session.get(
-            "https://yandex.ru/quasar?storage=1",
-            headers=DEFAULT_HEADERS,
-        ) as r:
-            resp = await r.json()
-        actual_uid = str(resp.get("storage", {}).get("user", {}).get("uid") or "")
-        if actual_uid == expected_uid:
-            return True
         if not await self._login_token(self.x_token):
             return False
 
         async with self._session.get(
             "https://yandex.ru/quasar?storage=1",
-            headers=DEFAULT_HEADERS,
+            headers=self._request_headers,
         ) as r:
             resp = await r.json()
         actual_uid = str(resp.get("storage", {}).get("user", {}).get("uid") or "")
@@ -178,7 +181,7 @@ class YandexSession:
     async def _login_token(self, x_token: str) -> bool:
         payload = {"type": "x-token", "retpath": YANDEX_LOGIN_RETPATH}
         headers = {
-            **DEFAULT_HEADERS,
+            **self._request_headers,
             "Ya-Consumer-Authorization": f"OAuth {x_token}",
             "Content-Type": "application/x-www-form-urlencoded",
         }
@@ -248,7 +251,7 @@ class YandexSession:
         empty_statuses: frozenset[int] | None = None,
     ) -> Any:
         empty_statuses = empty_statuses or frozenset()
-        request_headers = {**DEFAULT_HEADERS, **(headers or {})}
+        request_headers = {**self._request_headers, **(headers or {})}
         for attempt in range(2):
             async with self._session.request(
                 method,
