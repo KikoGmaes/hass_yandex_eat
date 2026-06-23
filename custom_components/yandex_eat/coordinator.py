@@ -1,38 +1,21 @@
 from __future__ import annotations
 
-
-
 import logging
-
 from dataclasses import dataclass
-
 from datetime import timedelta
-
 from typing import TYPE_CHECKING, Any
 
-
-
 from homeassistant.config_entries import ConfigEntry
-
 from homeassistant.core import HomeAssistant
-
 from homeassistant.exceptions import ConfigEntryAuthFailed
-
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
-
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-
-
+from homeassistant.util import dt as dt_util
 
 from .api import YandexEatApi
-
 from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN
-
-from .models import OrderHistoryEntry, TrackedOrder
-
+from .models import OrderHistoryEntry, TrackedOrder, is_cancelled_order, parse_order_cost, parse_order_year
 from .yandex_session import YandexSession
-
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -149,15 +132,30 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
 
 
     @property
-
     def recent_orders(self) -> list[OrderHistoryEntry]:
-
         return list(self.data.recent_orders)
 
-
+    def spent_orders(self) -> list[OrderHistoryEntry]:
+        return [
+            order
+            for order in self.recent_orders
+            if not is_cancelled_order(order.status) and parse_order_cost(order.cost) > 0
+        ]
 
     @property
+    def total_spent(self) -> float:
+        return sum(parse_order_cost(order.cost) for order in self.spent_orders())
 
+    @property
+    def total_spent_this_year(self) -> float:
+        year = dt_util.now().year
+        return sum(
+            parse_order_cost(order.cost)
+            for order in self.spent_orders()
+            if parse_order_year(order.order_nr, order.date, fallback_year=year) == year
+        )
+
+    @property
     def last_order(self) -> OrderHistoryEntry | None:
 
         if not self.data.recent_orders:

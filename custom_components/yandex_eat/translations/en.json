@@ -59,6 +59,12 @@
       },
       "past_orders_lavka": {
         "name": "Past orders Lavka"
+      },
+      "total_spent": {
+        "name": "Total spent"
+      },
+      "total_spent_year": {
+        "name": "Spent this year"
       }
     },
     "binary_sensor": {

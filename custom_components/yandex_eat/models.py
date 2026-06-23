@@ -6,6 +6,30 @@ from enum import StrEnum
 from typing import Any
 
 EDA_ORDER_NR_RE = re.compile(r"^\d{6}-\d+$")
+ORDER_YEAR_RE = re.compile(r",\s*(20\d{2})\s*$")
+
+
+def parse_order_cost(cost: str | None) -> float:
+    if not cost:
+        return 0.0
+    normalized = str(cost).replace("\u202f", "").replace(" ", "").replace(",", ".")
+    try:
+        return float(normalized)
+    except ValueError:
+        return 0.0
+
+
+def parse_order_year(order_nr: str, date: str, *, fallback_year: int) -> int:
+    if match := EDA_ORDER_NR_RE.match(order_nr):
+        return 2000 + int(match.group(0)[:2])
+    if year_match := ORDER_YEAR_RE.search(date):
+        return int(year_match.group(1))
+    return fallback_year
+
+
+def is_cancelled_order(status: str) -> bool:
+    lowered = status.lower()
+    return "отмен" in lowered or "cancel" in lowered
 
 
 class Service(StrEnum):

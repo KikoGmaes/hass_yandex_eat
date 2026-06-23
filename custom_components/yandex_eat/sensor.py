@@ -5,7 +5,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTime
+from homeassistant.const import CURRENCY_RUB, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -13,7 +13,7 @@ from homeassistant.util import dt as dt_util
 from .const import STATE_NO_ORDER
 from .coordinator import YandexEatCoordinator
 from .entity import YandexEatAccountEntity, primary_order_attributes
-from .models import Service
+from .models import Service, parse_order_year
 
 
 async def async_setup_entry(
@@ -32,6 +32,8 @@ async def async_setup_entry(
                 coordinator, Service.MARKET, "past_orders_delivery", "mdi:moped"
             ),
             YandexEatPastOrdersSensor(coordinator, Service.LAVKA, "past_orders_lavka", "mdi:cart"),
+            YandexEatTotalSpentSensor(coordinator),
+            YandexEatTotalSpentYearSensor(coordinator),
         ]
     )
 
@@ -158,4 +160,53 @@ class YandexEatPastOrdersSensor(YandexEatAccountEntity, SensorEntity):
                 if order.service == self._service
             ],
             "total_recent_orders": len(self.coordinator.recent_orders),
+        }
+
+
+class YandexEatTotalSpentSensor(YandexEatAccountEntity, SensorEntity):
+    _attr_translation_key = "total_spent"
+    _attr_icon = "mdi:cash-multiple"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = CURRENCY_RUB
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: YandexEatCoordinator) -> None:
+        super().__init__(coordinator, "total_spent")
+
+    @property
+    def native_value(self) -> float:
+        return round(self.coordinator.total_spent, 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "order_count": len(self.coordinator.spent_orders()),
+        }
+
+
+class YandexEatTotalSpentYearSensor(YandexEatAccountEntity, SensorEntity):
+    _attr_translation_key = "total_spent_year"
+    _attr_icon = "mdi:cash"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = CURRENCY_RUB
+    _attr_state_class = SensorStateClass.TOTAL
+
+    def __init__(self, coordinator: YandexEatCoordinator) -> None:
+        super().__init__(coordinator, "total_spent_year")
+
+    @property
+    def native_value(self) -> float:
+        return round(self.coordinator.total_spent_this_year, 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        year = dt_util.now().year
+        orders = [
+            order
+            for order in self.coordinator.spent_orders()
+            if parse_order_year(order.order_nr, order.date, fallback_year=year) == year
+        ]
+        return {
+            "year": year,
+            "order_count": len(orders),
         }
