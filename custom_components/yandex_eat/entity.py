@@ -32,7 +32,10 @@ class YandexEatEntity(YandexEatAccountEntity):
         super().__init__(coordinator, suffix)
         self._order_id = order.id
         self._attr_unique_id = f"{coordinator.entry.unique_id}_{order.id}_{suffix}"
-        service_label = "Lavka" if order.service.value == "lavka" else "Eda"
+        service_label = {
+            "lavka": "Lavka",
+            "market": "Delivery",
+        }.get(order.service.value, "Eda")
         order_label = order.short_order_id or order.id[:8]
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.entry.entry_id, order.id)},

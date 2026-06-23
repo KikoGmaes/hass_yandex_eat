@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from .const import INACTIVE_TRACKED_STATUSES, NEARBY_ETA_MINUTES, RETAIL_CHAIN_SUBSTRINGS
+
 EDA_ORDER_NR_RE = re.compile(r"^\d{6}-\d+$")
 
 
@@ -22,6 +24,11 @@ class OrderStatus(StrEnum):
     UNKNOWN = "unknown"
 
 
+def _is_retail_chain(name: str) -> bool:
+    low = name.lower().strip()
+    return any(chain in low for chain in RETAIL_CHAIN_SUBSTRINGS)
+
+
 @dataclass
 class TrackingInfo:
     grocery_image: str | None = None
@@ -34,7 +41,15 @@ class TrackingInfo:
         if not isinstance(raw, dict):
             return None
         remaining_time = None
-        for key in ("remainingTime", "remaining_time", "remaining_time_sec", "eta", "etaMinutes", "minutes"):
+        for key in (
+            "remainingTime",
+            "remaining_time",
+            "remaining_time_sec",
+            "eta",
+            "etaMinutes",
+            "minutes",
+            "eta_minutes",
+        ):
             if key not in raw:
                 continue
             val = raw[key]
@@ -79,40 +94,63 @@ class OrderHistoryEntry:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
-    def detect_service(item: dict[str, Any], default: Service = Service.EDA) -> Service:
+    def detect_service(
+        item: dict[str, Any],
+        default: Service = Service.EDA,
+        *,
+        place_business: str | None = None,
+        restaurant_as: Service = Service.EDA,
+    ) -> Service:
         order_nr = str(item.get("order_nr", ""))
         general = item.get("widgets", {}).get("general", {})
         if not isinstance(general, dict):
             general = {}
 
-        name = str(general.get("name", "")).lower()
+        name = str(general.get("name", ""))
+        name_low = name.lower()
         business_type = str(
             general.get("business_type", item.get("business_type", ""))
         ).lower()
         raw_blob = str(item).lower()
+        place_business_low = (place_business or "").lower()
 
         if order_nr.endswith("-grocery"):
             return Service.LAVKA
-        if EDA_ORDER_NR_RE.match(order_nr):
-            return Service.EDA
-        if "лавка" in name or "lavka" in name:
+        if "лавка" in name_low or "lavka" in name_low:
             return Service.LAVKA
         if business_type in {"shop", "store", "grocery", "lavka"}:
-            return Service.LAVKA
+            return Service.LAVKA if business_type == "lavka" else Service.MARKET
         if "lavka.yandex" in raw_blob or "/lavka/" in raw_blob:
             return Service.LAVKA
 
-        if "деливери" in name or "delivery club" in name:
+        if place_business_low in {"shop", "store", "retail"}:
+            return Service.MARKET
+        if _is_retail_chain(name):
+            return Service.MARKET
+
+        if "деливери" in name_low or "delivery club" in name_low:
             return Service.MARKET
         if business_type in {"delivery", "dc", "market"}:
             return Service.MARKET
         if "market-delivery" in raw_blob or "/dc/" in raw_blob:
             return Service.MARKET
 
+        if place_business_low in {"restaurant", "cafe", "fastfood"}:
+            return restaurant_as
+        if EDA_ORDER_NR_RE.match(order_nr):
+            return restaurant_as
+
         return default
 
     @classmethod
-    def from_api(cls, item: dict[str, Any], service: Service = Service.EDA) -> OrderHistoryEntry:
+    def from_api(
+        cls,
+        item: dict[str, Any],
+        service: Service = Service.EDA,
+        *,
+        place_business: str | None = None,
+        restaurant_as: Service = Service.EDA,
+    ) -> OrderHistoryEntry:
         general = item.get("widgets", {}).get("general", {})
         if not isinstance(general, dict):
             general = {}
@@ -124,7 +162,12 @@ class OrderHistoryEntry:
             date=str(general.get("date", "")),
             status=str(status_text),
             cost=general.get("cost_value"),
-            service=cls.detect_service(item, service),
+            service=cls.detect_service(
+                item,
+                service,
+                place_business=place_business,
+                restaurant_as=restaurant_as,
+            ),
             raw=item,
         )
 
@@ -150,11 +193,13 @@ class TrackedOrder:
         if self.order_status == OrderStatus.DELIVERY_ARRIVED:
             return True
         if self.tracking_info and self.tracking_info.remaining_time is not None:
-            return self.tracking_info.remaining_time <= 5
+            return self.tracking_info.remaining_time <= NEARBY_ETA_MINUTES
         return False
 
     @property
     def is_active(self) -> bool:
+        if self.status.lower() in INACTIVE_TRACKED_STATUSES:
+            return False
         return self.order_status != OrderStatus.CLOSED
 
     @classmethod

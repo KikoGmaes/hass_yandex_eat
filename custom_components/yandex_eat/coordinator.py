@@ -26,9 +26,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import YandexEatApi
 
-from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, CONF_RESTAURANT_AS, DEFAULT_SCAN_INTERVAL, DEFAULT_RESTAURANT_AS, DOMAIN, RESTAURANT_AS_MARKET
 
-from .models import OrderHistoryEntry, TrackedOrder
+from .models import OrderHistoryEntry, Service, TrackedOrder
 
 from .yandex_session import YandexSession
 
@@ -114,11 +114,16 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
 
         assert self.api is not None
 
+        restaurant_as = Service.EDA
+        restaurant_pref = self.entry.options.get(CONF_RESTAURANT_AS, DEFAULT_RESTAURANT_AS)
+        if restaurant_pref == RESTAURANT_AS_MARKET:
+            restaurant_as = Service.MARKET
+
         try:
 
             orders = await self.api.async_get_all_tracked_orders()
 
-            recent = await self.api.async_get_recent_orders()
+            recent = await self.api.async_get_recent_orders(restaurant_as=restaurant_as)
 
         except ConfigEntryAuthFailed:
 

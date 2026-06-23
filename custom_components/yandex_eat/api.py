@@ -1,21 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from .const import (
     EMPTY_HTTP_STATUSES,
+    ORDER_DETAIL_PATH,
     ORDERS_INFO_BASE_URLS,
     ORDERS_INFO_PATH,
     ORDERS_INFO_PAGE_LIMIT,
     ORDERS_INFO_MAX_PAGES,
     SERVICE_BASE_URLS,
+    SERVICE_EDA,
     SERVICE_MARKET,
     TRACKED_ORDERS_PATH,
     TRACKING_V2_BASE_URLS,
     TRACKING_V2_PATH,
 )
-from .models import OrderHistoryEntry, Service, TrackedOrder
+from .models import EDA_ORDER_NR_RE, OrderHistoryEntry, Service, TrackedOrder, _is_retail_chain
 from .yandex_session import YandexSession
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,6 +45,7 @@ def _pagination_settings(data: dict[str, Any]) -> dict[str, Any]:
 class YandexEatApi:
     def __init__(self, session: YandexSession) -> None:
         self._session = session
+        self._place_business_cache: dict[str, str] = {}
 
     async def async_get_profile(self, service: Service = Service.EDA) -> dict[str, Any]:
         base = SERVICE_BASE_URLS[service.value]
@@ -137,6 +141,7 @@ class YandexEatApi:
         base: str,
         *,
         default_service: Service,
+        restaurant_as: Service,
     ) -> list[OrderHistoryEntry]:
         merged: dict[str, OrderHistoryEntry] = {}
         ordered: list[str] = []
@@ -152,7 +157,11 @@ class YandexEatApi:
                 break
 
             for item in items:
-                entry = OrderHistoryEntry.from_api(item, default_service)
+                entry = OrderHistoryEntry.from_api(
+                    item,
+                    default_service,
+                    restaurant_as=restaurant_as,
+                )
                 if not entry.order_nr:
                     continue
                 if entry.order_nr not in merged:
@@ -172,7 +181,65 @@ class YandexEatApi:
 
         return [merged[order_nr] for order_nr in ordered if order_nr in merged]
 
-    async def async_get_recent_orders(self) -> list[OrderHistoryEntry]:
+    async def _async_get_place_business(self, order_nr: str) -> str | None:
+        if not order_nr or order_nr.endswith("-grocery"):
+            return "lavka" if order_nr.endswith("-grocery") else None
+        cached = self._place_business_cache.get(order_nr)
+        if cached is not None:
+            return cached or None
+
+        base = SERVICE_BASE_URLS[SERVICE_EDA]
+        url = f"{base}{ORDER_DETAIL_PATH}?order_nr={order_nr}"
+        try:
+            data = await self._session.get_json(url, headers=_service_headers(base))
+        except Exception as err:
+            _LOGGER.debug("order detail failed for %s: %s", order_nr, err)
+            self._place_business_cache[order_nr] = ""
+            return None
+
+        business = ""
+        if isinstance(data, dict):
+            place = data.get("place")
+            if isinstance(place, dict):
+                business = str(place.get("business") or "")
+        self._place_business_cache[order_nr] = business
+        return business or None
+
+    async def _async_enrich_order_services(
+        self,
+        entries: list[OrderHistoryEntry],
+        *,
+        restaurant_as: Service,
+    ) -> None:
+        unknown = [
+            entry
+            for entry in entries
+            if EDA_ORDER_NR_RE.match(entry.order_nr)
+            and not entry.order_nr.endswith("-grocery")
+            and not _is_retail_chain(entry.name)
+        ]
+        if not unknown:
+            return
+
+        batch_size = 10
+        for offset in range(0, len(unknown), batch_size):
+            batch = unknown[offset : offset + batch_size]
+            businesses = await asyncio.gather(
+                *(self._async_get_place_business(entry.order_nr) for entry in batch)
+            )
+            for entry, business in zip(batch, businesses, strict=True):
+                entry.service = OrderHistoryEntry.detect_service(
+                    entry.raw,
+                    entry.service,
+                    place_business=business,
+                    restaurant_as=restaurant_as,
+                )
+
+    async def async_get_recent_orders(
+        self,
+        *,
+        restaurant_as: Service = Service.EDA,
+    ) -> list[OrderHistoryEntry]:
         merged: dict[str, OrderHistoryEntry] = {}
         ordered: list[str] = []
         for base in ORDERS_INFO_BASE_URLS:
@@ -183,6 +250,7 @@ class YandexEatApi:
                 page_orders = await self._async_get_orders_from_base(
                     base,
                     default_service=default_service,
+                    restaurant_as=restaurant_as,
                 )
             except Exception as err:
                 _LOGGER.debug("order history failed for %s: %s", base, err)
@@ -193,4 +261,6 @@ class YandexEatApi:
                     ordered.append(entry.order_nr)
                 merged[entry.order_nr] = entry
 
-        return [merged[order_nr] for order_nr in ordered if order_nr in merged]
+        result = [merged[order_nr] for order_nr in ordered if order_nr in merged]
+        await self._async_enrich_order_services(result, restaurant_as=restaurant_as)
+        return result

@@ -9,7 +9,7 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
-from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, CONF_RESTAURANT_AS, DEFAULT_SCAN_INTERVAL, DEFAULT_RESTAURANT_AS, DOMAIN, RESTAURANT_AS_MARKET
 from .yandex_session import LoginResponse, YandexSession
 
 _LOGGER = logging.getLogger(__name__)
@@ -141,7 +141,16 @@ class YandexEatOptionsFlowHandler(OptionsFlow):
                     vol.Optional(
                         CONF_SCAN_INTERVAL,
                         default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=15, max=300))
+                    ): vol.All(vol.Coerce(int), vol.Range(min=15, max=300)),
+                    vol.Optional(
+                        CONF_RESTAURANT_AS,
+                        default=options.get(CONF_RESTAURANT_AS, DEFAULT_RESTAURANT_AS),
+                    ): vol.In(
+                        {
+                            DEFAULT_RESTAURANT_AS: "Еда (рестораны в счётчике Еда)",
+                            RESTAURANT_AS_MARKET: "Деливери (рестораны в счётчике Деливери)",
+                        }
+                    ),
                 }
             ),
         )
