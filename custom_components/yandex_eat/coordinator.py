@@ -20,13 +20,25 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
+from homeassistant.helpers.storage import Store
+
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 
 
 from .api import YandexEatApi
 
-from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, CONF_RESTAURANT_AS, DEFAULT_SCAN_INTERVAL, DEFAULT_RESTAURANT_AS, DOMAIN, RESTAURANT_AS_MARKET
+from .const import (
+    CONF_EXTRA_ORDER_NRS,
+    CONF_SCAN_INTERVAL,
+    CONF_X_TOKEN,
+    CONF_RESTAURANT_AS,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_RESTAURANT_AS,
+    DOMAIN,
+    KNOWN_ORDERS_STORE_VERSION,
+    RESTAURANT_AS_MARKET,
+)
 
 from .models import OrderHistoryEntry, Service, TrackedOrder
 
@@ -90,6 +102,12 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
 
         self.api: YandexEatApi | None = None
 
+        self._known_orders_store = Store(
+            hass,
+            KNOWN_ORDERS_STORE_VERSION,
+            f"{DOMAIN}_known_orders_{entry.entry_id}",
+        )
+
 
 
     async def _async_setup_api(self) -> None:
@@ -103,6 +121,25 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
             raise ConfigEntryAuthFailed("Invalid or expired Yandex token")
 
         self.api = YandexEatApi(yandex)
+
+    def _parse_extra_order_nrs(self) -> set[str]:
+        raw = self.entry.options.get(CONF_EXTRA_ORDER_NRS, "")
+        if not isinstance(raw, str) or not raw.strip():
+            return set()
+        return {part.strip() for part in raw.replace("\n", ",").split(",") if part.strip()}
+
+    async def _async_load_known_order_nrs(self) -> set[str]:
+        data = await self._known_orders_store.async_load()
+        if not isinstance(data, dict):
+            return set()
+        stored = data.get("order_nrs")
+        if not isinstance(stored, list):
+            return set()
+        return {str(order_nr) for order_nr in stored if order_nr}
+
+    async def _async_save_known_order_nrs(self, order_nrs: set[str]) -> None:
+        trimmed = sorted(order_nrs)[-500:]
+        await self._known_orders_store.async_save({"order_nrs": trimmed})
 
 
 
@@ -121,9 +158,22 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
 
         try:
 
-            orders = await self.api.async_get_all_tracked_orders()
+            known_order_nrs = await self._async_load_known_order_nrs()
+            known_order_nrs.update(self._parse_extra_order_nrs())
 
-            recent = await self.api.async_get_recent_orders(restaurant_as=restaurant_as)
+            orders = await self.api.async_get_all_tracked_orders()
+            for order in orders:
+                if order.id:
+                    known_order_nrs.add(order.id)
+
+            recent = await self.api.async_get_recent_orders(
+                restaurant_as=restaurant_as,
+                extra_order_nrs=frozenset(known_order_nrs),
+            )
+
+            for entry in recent:
+                known_order_nrs.add(entry.order_nr)
+            await self._async_save_known_order_nrs(known_order_nrs)
 
         except ConfigEntryAuthFailed:
 

@@ -143,6 +143,48 @@ class OrderHistoryEntry:
         return default
 
     @classmethod
+    def from_detail(
+        cls,
+        detail: dict[str, Any],
+        *,
+        default_service: Service = Service.EDA,
+        restaurant_as: Service = Service.EDA,
+    ) -> OrderHistoryEntry:
+        place = detail.get("place") if isinstance(detail.get("place"), dict) else {}
+        created_at = str(detail.get("created_at") or "")
+        status = detail.get("status_for_customer", "")
+        if isinstance(status, dict):
+            status = status.get("title") or status.get("text") or ""
+        cost = detail.get("total_cost_for_customer") or detail.get("final_cost_for_customer")
+        date_display = created_at[:10] if created_at else ""
+        item = {
+            "order_nr": detail.get("order_nr"),
+            "widgets": {
+                "general": {
+                    "name": place.get("name", ""),
+                    "date": date_display,
+                    "cost_value": str(cost) if cost is not None else None,
+                    "status": {"text": str(status)},
+                }
+            },
+        }
+        business = place.get("business")
+        return cls(
+            order_nr=str(detail.get("order_nr", "")),
+            name=str(place.get("name", "")),
+            date=date_display,
+            status=str(status),
+            cost=str(cost) if cost is not None else None,
+            service=cls.detect_service(
+                item,
+                default_service,
+                place_business=str(business) if business else None,
+                restaurant_as=restaurant_as,
+            ),
+            raw={**item, "created_at": created_at, "detail": detail},
+        )
+
+    @classmethod
     def from_api(
         cls,
         item: dict[str, Any],

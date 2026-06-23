@@ -8,6 +8,7 @@ from typing import Any
 from .const import (
     EMPTY_HTTP_STATUSES,
     ORDER_DETAIL_PATH,
+    ORDER_DETAIL_SUPPLEMENT_LIMIT,
     ORDERS_INFO_BASE_URLS,
     ORDERS_INFO_PATH,
     ORDERS_INFO_PAGE_LIMIT,
@@ -43,6 +44,16 @@ def _extract_orders_payload(data: Any) -> list[dict[str, Any]]:
 def _pagination_settings(data: dict[str, Any]) -> dict[str, Any]:
     ps = data.get("pagination_settings")
     return ps if isinstance(ps, dict) else {}
+
+
+def _history_sort_key(entry: OrderHistoryEntry) -> str:
+    created = entry.raw.get("created_at")
+    if isinstance(created, str) and created:
+        return created
+    order_nr = entry.order_nr
+    if EDA_ORDER_NR_RE.match(order_nr):
+        return f"20{order_nr[:2]}-{order_nr[2:4]}-{order_nr[4:6]}T00:00:00"
+    return entry.date or ""
 
 
 class YandexEatApi:
@@ -227,6 +238,18 @@ class YandexEatApi:
             if order_nr in raw_merged
         ]
 
+    async def _async_get_order_detail(self, order_nr: str) -> dict[str, Any] | None:
+        if not order_nr:
+            return None
+        base = SERVICE_BASE_URLS[SERVICE_EDA]
+        url = f"{base}{ORDER_DETAIL_PATH}?order_nr={order_nr}"
+        try:
+            data = await self._session.get_json(url, headers=_service_headers(base))
+        except Exception as err:
+            _LOGGER.debug("order detail failed for %s: %s", order_nr, err)
+            return None
+        return data if isinstance(data, dict) else None
+
     async def _async_get_place_business(self, order_nr: str) -> str | None:
         if not order_nr or order_nr.endswith("-grocery"):
             return "lavka" if order_nr.endswith("-grocery") else None
@@ -234,15 +257,7 @@ class YandexEatApi:
         if cached is not None:
             return cached or None
 
-        base = SERVICE_BASE_URLS[SERVICE_EDA]
-        url = f"{base}{ORDER_DETAIL_PATH}?order_nr={order_nr}"
-        try:
-            data = await self._session.get_json(url, headers=_service_headers(base))
-        except Exception as err:
-            _LOGGER.debug("order detail failed for %s: %s", order_nr, err)
-            self._place_business_cache[order_nr] = ""
-            return None
-
+        data = await self._async_get_order_detail(order_nr)
         business = ""
         if isinstance(data, dict):
             place = data.get("place")
@@ -250,6 +265,36 @@ class YandexEatApi:
                 business = str(place.get("business") or "")
         self._place_business_cache[order_nr] = business
         return business or None
+
+    async def _async_supplement_from_details(
+        self,
+        merged: dict[str, OrderHistoryEntry],
+        ordered: list[str],
+        extra_order_nrs: frozenset[str],
+        *,
+        restaurant_as: Service,
+    ) -> None:
+        missing = [
+            order_nr
+            for order_nr in sorted(extra_order_nrs)
+            if order_nr and order_nr not in merged
+        ][:ORDER_DETAIL_SUPPLEMENT_LIMIT]
+        if not missing:
+            return
+
+        details = await asyncio.gather(
+            *(self._async_get_order_detail(order_nr) for order_nr in missing)
+        )
+        for detail in details:
+            if not isinstance(detail, dict) or not detail.get("order_nr"):
+                continue
+            entry = OrderHistoryEntry.from_detail(
+                detail,
+                restaurant_as=restaurant_as,
+            )
+            if entry.order_nr not in merged:
+                ordered.append(entry.order_nr)
+            merged[entry.order_nr] = entry
 
     async def _async_enrich_order_services(
         self,
@@ -285,6 +330,7 @@ class YandexEatApi:
         self,
         *,
         restaurant_as: Service = Service.EDA,
+        extra_order_nrs: frozenset[str] | None = None,
     ) -> list[OrderHistoryEntry]:
         merged: dict[str, OrderHistoryEntry] = {}
         ordered: list[str] = []
@@ -307,6 +353,15 @@ class YandexEatApi:
                     ordered.append(entry.order_nr)
                 merged[entry.order_nr] = entry
 
+        if extra_order_nrs:
+            await self._async_supplement_from_details(
+                merged,
+                ordered,
+                extra_order_nrs,
+                restaurant_as=restaurant_as,
+            )
+
         result = [merged[order_nr] for order_nr in ordered if order_nr in merged]
+        result.sort(key=_history_sort_key, reverse=True)
         await self._async_enrich_order_services(result, restaurant_as=restaurant_as)
         return result
