@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 EDA_ORDER_NR_RE = re.compile(r"^\d{6}-\d+$")
 ORDER_YEAR_RE = re.compile(r",\s*(20\d{2})\s*$")
 ETA_TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
+ETA_MINUTES_RANGE_RE = re.compile(r"(\d{1,3})\s*[–\-—−]\s*(\d{1,3})\s*мин", re.IGNORECASE)
+ETA_MINUTES_SINGLE_RE = re.compile(r"(\d{1,3})\s*мин", re.IGNORECASE)
 try:
     YANDEX_LOCAL_TZ = ZoneInfo("Europe/Moscow")
 except ZoneInfoNotFoundError:
@@ -56,6 +58,16 @@ def is_delivered_order(status: str) -> bool:
     return "доставлен" in lowered or "delivered" in lowered
 
 
+def parse_courier_minutes_from_text(text: str | None) -> int | None:
+    if not text:
+        return None
+    if match := ETA_MINUTES_RANGE_RE.search(text):
+        return max(int(match.group(1)), int(match.group(2)))
+    if match := ETA_MINUTES_SINGLE_RE.search(text):
+        return int(match.group(1))
+    return None
+
+
 def parse_eta_minutes_from_title(title: str | None) -> int | None:
     if not title:
         return None
@@ -70,11 +82,19 @@ def parse_eta_minutes_from_title(title: str | None) -> int | None:
     return int((eta - now).total_seconds() // 60)
 
 
-def _eta_from_tracking_titles(data: dict[str, Any]) -> int | None:
+def _delivery_eta_from_tracking_titles(data: dict[str, Any]) -> int | None:
+    for key in ("title", "eta_text", "etaText"):
+        delivery_eta = parse_eta_minutes_from_title(str(data.get(key) or ""))
+        if delivery_eta is not None:
+            return delivery_eta
+    return None
+
+
+def _courier_eta_from_tracking_titles(data: dict[str, Any]) -> int | None:
     for key in ("title", "eta_text", "etaText", "subtitle"):
-        remaining_time = parse_eta_minutes_from_title(str(data.get(key) or ""))
-        if remaining_time is not None:
-            return remaining_time
+        courier_eta = parse_courier_minutes_from_text(str(data.get(key) or ""))
+        if courier_eta is not None:
+            return courier_eta
     return None
 
 
@@ -200,7 +220,9 @@ class TrackingInfo:
 
         tracked_order = raw.get("tracked_order")
         if isinstance(tracked_order, dict):
-            delivery_eta_minutes = _eta_from_tracking_titles(tracked_order)
+            delivery_eta_minutes = _delivery_eta_from_tracking_titles(tracked_order)
+            if courier_eta_minutes is None:
+                courier_eta_minutes = _courier_eta_from_tracking_titles(tracked_order)
 
         for key in ("tracking_info", "trackingInfo", "payload", "order"):
             nested = raw.get(key)
@@ -221,7 +243,10 @@ class TrackingInfo:
                 grocery_image = grocery_image or info.grocery_image
 
         if delivery_eta_minutes is None:
-            delivery_eta_minutes = _eta_from_tracking_titles(raw)
+            delivery_eta_minutes = _delivery_eta_from_tracking_titles(raw)
+
+        if courier_eta_minutes is None:
+            courier_eta_minutes = _courier_eta_from_tracking_titles(raw)
 
         if (
             delivery_eta_minutes is None
@@ -322,7 +347,11 @@ class TrackedOrder:
             return None
         if self.tracking_info.courier_eta_minutes is not None:
             return self.tracking_info.courier_eta_minutes
-        return _eta_from_tracking_titles(self.tracking_info.raw)
+        tracked_order = self.tracking_info.raw.get("tracked_order")
+        if isinstance(tracked_order, dict):
+            if courier_eta := _courier_eta_from_tracking_titles(tracked_order):
+                return courier_eta
+        return _courier_eta_from_tracking_titles(self.tracking_info.raw)
 
     @property
     def courier_nearby(self) -> bool:
