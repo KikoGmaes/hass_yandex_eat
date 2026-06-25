@@ -13,8 +13,23 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import YandexEatApi
-from .const import CONF_SCAN_INTERVAL, CONF_X_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN
-from .models import OrderHistoryEntry, TrackedOrder, is_cancelled_order, parse_order_cost, parse_order_year
+from .const import (
+    CONF_SCAN_INTERVAL,
+    CONF_X_TOKEN,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    NEARBY_ETA_MINUTES,
+    SCAN_INTERVAL_FAST,
+    SCAN_INTERVAL_URGENT,
+)
+from .models import (
+    COURIER_TRACKING_STATUSES,
+    OrderHistoryEntry,
+    TrackedOrder,
+    is_cancelled_order,
+    parse_order_cost,
+    parse_order_year,
+)
 from .yandex_session import YandexSession
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,6 +69,7 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
     def __init__(self, hass: HomeAssistant, entry: YandexEatConfigEntry) -> None:
 
         scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        self._base_scan_interval = int(scan_interval)
 
         super().__init__(
 
@@ -63,7 +79,7 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
 
             name=f"{DOMAIN}_{entry.unique_id}",
 
-            update_interval=timedelta(seconds=scan_interval),
+            update_interval=timedelta(seconds=self._base_scan_interval),
 
             config_entry=entry,
 
@@ -113,13 +129,37 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
 
             raise UpdateFailed(str(err)) from err
 
-        return YandexEatCoordinatorData(
-
+        data = YandexEatCoordinatorData(
             orders={order.id: order for order in orders if order.id},
-
             recent_orders=tuple(recent),
-
         )
+        self._apply_poll_interval([o for o in data.orders.values() if o.is_active])
+        return data
+
+    def _compute_poll_interval(self, active_orders: list[TrackedOrder]) -> int:
+        if not active_orders:
+            return self._base_scan_interval
+
+        interval = self._base_scan_interval
+        for order in active_orders:
+            if order.courier_nearby:
+                interval = min(interval, SCAN_INTERVAL_URGENT)
+                continue
+            courier_eta = order.courier_eta_minutes
+            if courier_eta is not None and courier_eta <= NEARBY_ETA_MINUTES:
+                interval = min(interval, SCAN_INTERVAL_FAST)
+                continue
+            if order.order_status in COURIER_TRACKING_STATUSES:
+                interval = min(interval, max(self._base_scan_interval, 60))
+
+        return max(interval, SCAN_INTERVAL_URGENT)
+
+    def _apply_poll_interval(self, active_orders: list[TrackedOrder]) -> None:
+        new_seconds = self._compute_poll_interval(active_orders)
+        old_seconds = int(self.update_interval.total_seconds()) if self.update_interval else 0
+        self.update_interval = timedelta(seconds=new_seconds)
+        if new_seconds < old_seconds:
+            self.hass.async_create_task(self.async_request_refresh())
 
 
 
@@ -223,6 +263,8 @@ class YandexEatCoordinator(DataUpdateCoordinator[YandexEatCoordinatorData]):
 
         if order.courier_eta_minutes is not None:
             attrs["courier_eta_minutes"] = order.courier_eta_minutes
+
+        attrs["poll_interval_seconds"] = int(self.update_interval.total_seconds())
 
         return attrs
 

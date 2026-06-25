@@ -355,10 +355,28 @@ class TrackedOrder:
 
     @property
     def courier_nearby(self) -> bool:
+        if self._is_delivered_phase():
+            return False
         if self.order_status == OrderStatus.DELIVERY_ARRIVED:
             return True
-        eta = self.courier_eta_minutes
-        return eta is not None and eta <= 5
+        tracked = self.raw.get("desktop_tracking", {}).get("tracked_order", {})
+        if not isinstance(tracked, dict):
+            tracked = {}
+        text = f"{tracked.get('title', '')} {tracked.get('subtitle', '')}".lower()
+        return any(marker in text for marker in ("уже рядом", "курьер рядом"))
+
+    def _is_delivered_phase(self) -> bool:
+        analytics = self.raw.get("desktop_tracking", {}).get("analytics", {})
+        if isinstance(analytics, dict):
+            order_status = str(analytics.get("order_status") or "").lower()
+            if order_status in ("delivered", "completed"):
+                return True
+        tracked = self.raw.get("desktop_tracking", {}).get("tracked_order", {})
+        if not isinstance(tracked, dict):
+            return False
+        title = str(tracked.get("title") or "").lower()
+        subtitle = str(tracked.get("subtitle") or "").lower()
+        return "доставлен" in title or "спасибо за покупку" in subtitle
 
     @property
     def is_active(self) -> bool:
