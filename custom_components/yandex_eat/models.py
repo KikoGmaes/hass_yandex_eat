@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 EDA_ORDER_NR_RE = re.compile(r"^\d{6}-\d+$")
 ORDER_YEAR_RE = re.compile(r",\s*(20\d{2})\s*$")
 ETA_TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
+try:
+    YANDEX_LOCAL_TZ = ZoneInfo("Europe/Moscow")
+except ZoneInfoNotFoundError:
+    YANDEX_LOCAL_TZ = timezone(timedelta(hours=3))
 ACTIVE_STATUS_MARKERS = (
     "в работе",
     "in progress",
@@ -58,11 +63,19 @@ def parse_eta_minutes_from_title(title: str | None) -> int | None:
     if not match:
         return None
     hour, minute = int(match.group(1)), int(match.group(2))
-    now = datetime.now()
+    now = datetime.now(YANDEX_LOCAL_TZ)
     eta = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if eta <= now:
         return 0
     return int((eta - now).total_seconds() // 60)
+
+
+def _eta_from_tracking_titles(data: dict[str, Any]) -> int | None:
+    for key in ("title", "eta_text", "etaText", "subtitle"):
+        remaining_time = parse_eta_minutes_from_title(str(data.get(key) or ""))
+        if remaining_time is not None:
+            return remaining_time
+    return None
 
 
 def order_status_text(item: dict[str, Any]) -> str:
@@ -102,6 +115,7 @@ class Service(StrEnum):
 
 
 class OrderStatus(StrEnum):
+    CONFIRMED = "confirmed"
     ASSEMBLING = "assembling"
     PERFORMER_FOUND = "performer_found"
     DELIVERY_ARRIVED = "delivery_arrived"
@@ -168,6 +182,10 @@ class TrackingInfo:
     def from_desktop_tracking(cls, raw: dict[str, Any] | None) -> TrackingInfo | None:
         if not isinstance(raw, dict):
             return None
+        tracked_order = raw.get("tracked_order")
+        if isinstance(tracked_order, dict):
+            if remaining_time := _eta_from_tracking_titles(tracked_order):
+                return cls(remaining_time=remaining_time, raw=raw)
         for key in ("tracking_info", "trackingInfo", "payload", "order"):
             nested = raw.get(key)
             if isinstance(nested, dict):
@@ -177,10 +195,8 @@ class TrackingInfo:
         info = cls.from_raw(raw)
         if info and (info.remaining_time is not None or info.courier_position):
             return info
-        for key in ("title", "eta_text", "etaText", "subtitle"):
-            remaining_time = parse_eta_minutes_from_title(str(raw.get(key) or ""))
-            if remaining_time is not None:
-                return cls(remaining_time=remaining_time, raw=raw)
+        if remaining_time := _eta_from_tracking_titles(raw):
+            return cls(remaining_time=remaining_time, raw=raw)
         return None
 
 
@@ -311,13 +327,18 @@ class TrackedOrder:
         if isinstance(progress, dict):
             bar = progress.get("progress_bar")
             if isinstance(bar, dict):
-                active_steps = bar.get("active_steps_amount")
-                total_steps = bar.get("steps_amount")
+                steps = bar.get("steps")
+                if not isinstance(steps, dict):
+                    steps = bar
+                active_steps = steps.get("active_steps_amount")
+                total_steps = steps.get("steps_amount")
                 if isinstance(active_steps, int) and isinstance(total_steps, int) and total_steps > 0:
                     if active_steps >= total_steps:
                         return OrderStatus.DELIVERY_ARRIVED
                     if active_steps >= max(1, total_steps - 1):
                         return OrderStatus.PERFORMER_FOUND
+                    if active_steps == 1:
+                        return OrderStatus.CONFIRMED
                     return OrderStatus.ASSEMBLING
         status_text = order_status_text(item).lower()
         if "курьер" in status_text or "дороге" in status_text or "performer" in status_text:

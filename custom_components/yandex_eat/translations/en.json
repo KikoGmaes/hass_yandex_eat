@@ -46,7 +46,16 @@
         "name": "Active orders"
       },
       "order_status": {
-        "name": "Status"
+        "name": "Status",
+        "state": {
+          "none": "No order",
+          "confirmed": "Confirmed",
+          "assembling": "Assembling",
+          "performer_found": "Courier on the way",
+          "delivery_arrived": "Courier nearby",
+          "closed": "Completed",
+          "unknown": "Unknown"
+        }
       },
       "courier_eta": {
         "name": "Courier ETA"

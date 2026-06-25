@@ -1,4 +1,5 @@
 .env
+debug_dumps/
 .venv/
 __pycache__/
 *.pyc

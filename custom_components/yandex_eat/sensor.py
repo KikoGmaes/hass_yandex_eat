@@ -15,7 +15,7 @@ from homeassistant.util import dt as dt_util
 from .const import STATE_NO_ORDER
 from .coordinator import YandexEatCoordinator
 from .entity import YandexEatAccountEntity, primary_order_attributes
-from .models import Service, parse_order_year
+from .models import OrderStatus, Service, parse_order_year
 
 
 async def async_setup_entry(
@@ -83,6 +83,8 @@ class YandexEatActiveOrdersSensor(YandexEatAccountEntity, SensorEntity):
 class YandexEatOrderStatusSensor(YandexEatAccountEntity, SensorEntity):
     _attr_translation_key = "order_status"
     _attr_icon = "mdi:truck-delivery"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = [status.value for status in OrderStatus] + [STATE_NO_ORDER]
 
     def __init__(self, coordinator: YandexEatCoordinator) -> None:
         super().__init__(coordinator, "order_status")
